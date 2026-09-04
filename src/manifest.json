@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Context Lens",
+  "version": "0.1.0",
+  "description": "Select any text and get the right kind of explanation for what it actually is.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.anthropic.com/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": { "default_title": "Context Lens — open settings" }
+}
