@@ -48,7 +48,8 @@ formula gets its symbols broken down.
 src/
   manifest.json          MV3 manifest
   content/
-    index.js             pipeline entry: selection → context → port → popup
+    index.js             pipeline entry: selection → context → transport → popup
+    transport.js         the port protocol and every way it can fail
     selection.js         reads window.getSelection() and its screen rect
     context.js           stage 2 — page context extraction (DOM only)
     popup.js             stage 5 — floating chip + streaming panel, closed shadow root
@@ -72,6 +73,7 @@ src/
 test/
   pipeline.test.mjs      heuristics, routing, prompt assembly
   stream.test.mjs        CATEGORY-line parsing + explain() over a fake stream
+  messaging.test.mjs     port failure modes against a fake chrome.runtime
 bench/latency.mjs        live per-stage latency measurement, old path vs new
 build.mjs                esbuild: content → IIFE, worker → ESM
 ```
@@ -91,6 +93,37 @@ Use it: select text on any page, click the **Explain** chip, or press ⌘⇧E / 
 `npm run watch` rebuilds on save; click the reload icon on the extension card to pick
 changes up. `npm test` runs the offline suite. `npm run bench` measures real latency —
 it needs `ANTHROPIC_API_KEY` and makes live calls.
+
+## The port protocol
+
+The content script talks to the worker over a named port (`context-lens/explain`),
+because streaming needs a channel that stays open. The worker replies with an **ack the
+instant `onConnect` fires**, before touching settings or the network. That ack is what
+lets the content script tell "the worker never accepted the port" apart from "the answer
+is still coming" — without it, both look identical and the popup hangs.
+
+Every failure ends in a visible message with a suggested action, never a stuck
+`Identifying`:
+
+| Failure | Detected by | What the reader sees |
+| --- | --- | --- |
+| Extension reloaded while the tab was open | `connect()` throws, or `lastError` says "context invalidated" | reload the page |
+| Worker never accepted the port | no ack within 3s, or immediate disconnect | reload, and check `chrome://extensions` |
+| Accepted, then silence | no further event within 25s | timed out |
+| Port dropped mid-answer | disconnect after an ack | connection closed early; partial text is kept |
+
+`onDisconnect` reads `chrome.runtime.lastError`. That is not optional bookkeeping: not
+reading it is what produces `Unchecked runtime.lastError: Could not establish connection.
+Receiving end does not exist.` in the page console, and it is the only place the real
+reason is available.
+
+An orphaned content script — one that outlived its extension because the extension was
+reloaded or updated while the tab was open — is unrecoverable in that tab. The transport
+remembers it and fails subsequent requests immediately instead of retrying a connection
+that cannot succeed.
+
+`transport.js` holds this logic with the DOM kept out, so `test/messaging.test.mjs` can
+drive all of it against a fake `chrome.runtime`.
 
 ## Latency
 
@@ -146,6 +179,9 @@ for a `fetch` to your endpoint.
 
 ## Known gaps
 
+- The transport is verified against a fake runtime, and the built worker is verified to
+  load and register `onConnect` in a browser environment. Neither is a substitute for
+  loading the unpacked extension in Chrome.
 - The five placeholder answer shapes are one line each. Real skills will want more, and
   citations in particular will need web search to actually *locate* a source.
 - Near the bottom of the viewport the panel is anchored above the selection using its

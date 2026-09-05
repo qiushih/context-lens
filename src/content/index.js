@@ -3,26 +3,25 @@
  * stage 5 (Popup). Context extraction has to live here because this is the
  * only side with a DOM; it costs well under a millisecond.
  *
- * Explanations arrive over a port rather than a one-shot message, so tokens
- * can be painted as they are generated.
+ * The port protocol itself lives in transport.js so its failure modes can be
+ * tested without a browser. This file is DOM plumbing.
  */
-import { EXPLAIN_PORT, MSG, EVENT, ERROR_CODES } from "../shared/messages.js";
+import { MSG, ERROR_CODES } from "../shared/messages.js";
 import { readSelection, MAX_SELECTION_CHARS } from "./selection.js";
 import { extractContext } from "./context.js";
 import { createLens } from "./popup.js";
+import { createTransport, describeFailure } from "./transport.js";
 
 let pending = null; // { text, rect, context }
-let port = null;
+
+const transport = createTransport({ runtime: chrome.runtime });
 
 const lens = createLens({
-  onExplain: () => pending && explain(pending),
-  onOpenSettings: () => chrome.runtime.sendMessage({ type: MSG.OPEN_OPTIONS }),
+  onExplain: () => pending && startExplain(pending),
+  onOpenSettings: () =>
+    chrome.runtime.sendMessage({ type: MSG.OPEN_OPTIONS }).catch((e) => transport.noteError(e)),
+  onReload: () => location.reload(),
 });
-
-function closePort() {
-  port?.disconnect(); // tells the worker to abort an in-flight stream
-  port = null;
-}
 
 function capture() {
   const selection = readSelection();
@@ -40,29 +39,28 @@ function capture() {
 
   // Wake the service worker now, while the user is still deciding to click.
   // MV3 kills it after ~30s idle, and spin-up would otherwise land on the
-  // critical path of the very first explanation.
-  chrome.runtime.sendMessage({ type: MSG.PING }).catch(() => {});
+  // critical path. The failure is as useful as the success: it is the earliest
+  // signal that this content script can no longer reach the extension.
+  chrome.runtime.sendMessage({ type: MSG.PING }).catch((e) => transport.noteError(e));
 }
 
-function explain({ text, rect, context }) {
-  closePort();
+function startExplain({ text, rect, context }) {
   const clickedAt = performance.now();
   let firstPaint = null;
 
   lens.open(rect, text); // paints before any network work begins
 
-  port = chrome.runtime.connect({ name: EXPLAIN_PORT });
+  transport.request(
+    { selection: text, context },
+    {
+      onCategory: (event) => lens.setCategory(event.label),
 
-  port.onMessage.addListener((event) => {
-    switch (event.type) {
-      case EVENT.CATEGORY:
-        lens.setCategory(event.label);
-        break;
-      case EVENT.DELTA:
+      onDelta: (event) => {
         if (firstPaint === null) firstPaint = performance.now() - clickedAt;
         lens.pushDelta(event.text);
-        break;
-      case EVENT.DONE:
+      },
+
+      onDone: (event) => {
         lens.finish();
         console.debug(
           "[context-lens] first paint %sms, total %sms%s",
@@ -70,29 +68,28 @@ function explain({ text, rect, context }) {
           Math.round(performance.now() - clickedAt),
           event.timing?.cached ? " (cached)" : "",
         );
-        closePort();
-        break;
-      case EVENT.ERROR:
+      },
+
+      onError: (error) =>
         lens.fail(
           rect,
-          event.error?.code === ERROR_CODES.NO_API_KEY
+          error.code === ERROR_CODES.NO_API_KEY
             ? {
                 message: "Add an Anthropic API key to start explaining selections.",
-                actionLabel: "Open settings",
+                action: { label: "Open settings", kind: "settings" },
               }
-            : { message: event.error?.message ?? "Something went wrong." },
-        );
-        closePort();
-        break;
-    }
-  });
+            : { message: error.message ?? "Something went wrong." },
+        ),
 
-  // Fires when the worker dies or the extension reloads.
-  port.onDisconnect.addListener(() => {
-    port = null;
-  });
-
-  port.postMessage({ type: "start", payload: { selection: text, context } });
+      onFailure: (failure) => {
+        const { message, reload } = describeFailure(failure);
+        lens.fail(rect, {
+          message,
+          action: reload ? { label: "Reload page", kind: "reload" } : null,
+        });
+      },
+    },
+  );
 }
 
 document.addEventListener("mouseup", (e) => {
@@ -104,20 +101,20 @@ document.addEventListener("mouseup", (e) => {
 document.addEventListener("mousedown", (e) => {
   if (!lens.contains(e.target)) {
     lens.hide();
-    closePort();
+    transport.cancel();
   }
 });
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     lens.hide();
-    closePort();
+    transport.cancel();
   }
   if (e.key.toLowerCase() === "e" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
     capture();
     if (pending) {
       e.preventDefault();
-      explain(pending);
+      startExplain(pending);
     }
   }
 });

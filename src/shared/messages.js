@@ -12,6 +12,9 @@ export const MSG = {
 
 /** Events the worker pushes down the port, in order. */
 export const EVENT = {
+  /** Sent the instant onConnect fires, so the content script can tell
+   *  "the worker never accepted the port" from "the answer is slow". */
+  ACK: "ack",
   CATEGORY: "category",
   DELTA: "delta",
   DONE: "done",
@@ -22,4 +25,10 @@ export const ERROR_CODES = {
   NO_API_KEY: "no_api_key",
   API_ERROR: "api_error",
   REFUSED: "refused",
+  /** The port closed before the answer finished. */
+  DISCONNECTED: "disconnected",
+  /** This content script outlived its extension - the page must be reloaded. */
+  ORPHANED: "orphaned",
+  /** The worker accepted the port, then went quiet. */
+  TIMEOUT: "timeout",
 };

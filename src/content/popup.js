@@ -108,7 +108,7 @@ function renderMarkdown(text) {
     .join("");
 }
 
-export function createLens({ onExplain, onOpenSettings }) {
+export function createLens({ onExplain, onOpenSettings, onReload }) {
   const host = document.createElement("div");
   host.style.cssText = "position:absolute;top:0;left:0;width:0;height:0;";
   const root = host.attachShadow({ mode: "closed" });
@@ -234,18 +234,25 @@ export function createLens({ onExplain, onOpenSettings }) {
       if (anchor) place(panel, anchor);
     },
 
-    fail(rect, { message, actionLabel }) {
+    /**
+     * Terminal state. Every failure path ends here rather than leaving the
+     * panel on "Identifying" forever.
+     */
+    fail(rect, { message, action }) {
       chip.hidden = true;
+      if (frame) cancelAnimationFrame(frame);
+      frame = null;
       shell({
         tag: "Context Lens",
         tagPending: true,
         inner: `<div class="error">${escapeHtml(message)}
-          ${actionLabel ? `<div><button class="settings">${escapeHtml(actionLabel)}</button></div>` : ""}
+          ${action ? `<div><button class="action">${escapeHtml(action.label)}</button></div>` : ""}
         </div>`,
       });
-      panel.querySelector(".settings")?.addEventListener("mousedown", (e) => {
+      panel.querySelector(".action")?.addEventListener("mousedown", (e) => {
         e.preventDefault();
-        onOpenSettings();
+        if (action.kind === "reload") onReload();
+        else onOpenSettings();
       });
       bodyEl = null;
       place(panel, rect);

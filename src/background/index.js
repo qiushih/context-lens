@@ -45,7 +45,14 @@ async function handleExplain(port, payload) {
   });
 
   const send = (message) => {
-    if (!closed) port.postMessage(message);
+    if (closed) return;
+    try {
+      port.postMessage(message);
+    } catch {
+      // The tab navigated away mid-stream; stop doing work for it.
+      closed = true;
+      abort.abort();
+    }
   };
 
   try {
@@ -98,8 +105,21 @@ async function handleExplain(port, payload) {
   }
 }
 
+// Registered synchronously at worker startup. MV3 dispatches the connect event
+// that woke the worker only to listeners that exist by the end of the initial
+// script evaluation, so nothing here may be deferred behind an await.
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== EXPLAIN_PORT) return;
+
+  // Answer immediately, before any settings or network work. This is what lets
+  // the content script distinguish "the worker never accepted the port" from
+  // "the explanation is still coming".
+  try {
+    port.postMessage({ type: EVENT.ACK });
+  } catch {
+    return; // the other end is already gone
+  }
+
   port.onMessage.addListener((message) => {
     if (message?.type === "start") handleExplain(port, message.payload);
   });
