@@ -12,20 +12,32 @@
       h1 { font-size: 18px; margin-bottom: 4px; }
       p.sub { color: #6b7280; margin-top: 0; }
       label { display: block; font-weight: 600; margin: 18px 0 6px; }
-      input { width: 100%; padding: 8px 10px; font: inherit; border-radius: 6px;
-              border: 1px solid #cbd0d8; box-sizing: border-box; background: canvas; color: canvastext; }
-      button { margin-top: 18px; font: inherit; padding: 8px 14px; border: 0;
-               border-radius: 6px; background: #a8562b; color: #fff; cursor: pointer; }
+      input, select {
+        width: 100%; padding: 8px 10px; font: inherit; border-radius: 6px;
+        border: 1px solid #cbd0d8; box-sizing: border-box; background: canvas; color: canvastext;
+      }
+      .hint { color: #6b7280; font-size: 13px; margin: 6px 0 0; }
+      button {
+        margin-top: 18px; font: inherit; padding: 8px 14px; border: 0;
+        border-radius: 6px; background: #a8562b; color: #fff; cursor: pointer;
+      }
       .status { margin-left: 10px; color: #4b8b3b; }
       .note { color: #6b7280; font-size: 13px; margin-top: 24px; }
     </style>
   </head>
   <body>
     <h1>Context Lens</h1>
-    <p class="sub">Select text on any page, then click <strong>Explain</strong> (or press ⌘/Ctrl + Shift + E).</p>
+    <p class="sub">Select text on any page, then click <strong>Explain</strong> (or press &#8984;&#8679;E / Ctrl&#8679;E).</p>
 
     <label for="apiKey">Anthropic API key</label>
-    <input id="apiKey" type="password" placeholder="sk-ant-…" autocomplete="off" />
+    <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off" />
+
+    <label for="modelTier">Model</label>
+    <select id="modelTier"></select>
+    <p class="hint">
+      Haiku 4.5 answers a popup-sized question in about a second. The slower
+      options think before answering and are worth it only for dense material.
+    </p>
 
     <label for="targetLanguage">Translate vocabulary into</label>
     <input id="targetLanguage" type="text" placeholder="English" />

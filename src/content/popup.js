@@ -1,10 +1,18 @@
 /**
  * The floating UI. Everything lives in a shadow root so host-page CSS can't
  * reach it and our CSS can't leak out.
+ *
+ * Latency behaviour: the panel opens on click with the selection already in
+ * it, the category label swaps in the moment it is known (0 ms on a heuristic
+ * hit, first tokens otherwise), and prose is appended as it streams. There is
+ * no state in which the user is looking at a bare spinner.
  */
 
 const STYLES = `
 :host { all: initial; }
+/* The UA's [hidden]{display:none} loses to .chip{display:flex} on specificity,
+   which would leave the chip parked in the top-left corner forever. */
+.chip[hidden], .panel[hidden] { display: none !important; }
 .chip, .panel {
   position: absolute;
   z-index: 2147483647;
@@ -36,8 +44,7 @@ const STYLES = `
 }
 .chip {
   display: flex; align-items: center; gap: 6px;
-  padding: 5px 10px; cursor: pointer; user-select: none;
-  font-weight: 500;
+  padding: 5px 10px; cursor: pointer; user-select: none; font-weight: 500;
 }
 .chip:hover { border-color: var(--cl-accent); }
 .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cl-accent); }
@@ -49,14 +56,14 @@ const STYLES = `
 .tag {
   font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
   color: var(--cl-accent);
+  transition: opacity .12s ease;
 }
+.tag.pending { color: var(--cl-muted); opacity: .8; }
 .close {
   border: 0; background: transparent; color: var(--cl-muted);
   cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px;
 }
-.subject {
-  font-weight: 600; margin-bottom: 6px; word-break: break-word;
-}
+.subject { font-weight: 600; margin-bottom: 6px; word-break: break-word; }
 .body p { margin: 0 0 8px; }
 .body ul { margin: 0 0 8px; padding-left: 18px; }
 .body li { margin: 0 0 3px; }
@@ -64,18 +71,17 @@ const STYLES = `
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
   background: var(--cl-code-bg); border-radius: 4px; padding: 1px 4px;
 }
+.body.streaming > :last-child::after {
+  content: ""; display: inline-block; width: 6px; height: 13px;
+  background: var(--cl-accent); opacity: .7; vertical-align: -2px; margin-left: 2px;
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
 .muted { color: var(--cl-muted); }
-.error { color: var(--cl-fg); }
 .error button {
   margin-top: 8px; font: inherit; cursor: pointer;
   background: var(--cl-accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 10px;
 }
-.spinner {
-  width: 12px; height: 12px; border-radius: 50%; display: inline-block;
-  border: 2px solid var(--cl-border); border-top-color: var(--cl-accent);
-  animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 6px;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 `;
 
 const escapeHtml = (s) =>
@@ -128,23 +134,43 @@ export function createLens({ onExplain, onOpenSettings }) {
     onExplain();
   });
 
-  /** Place an element under the selection, kept inside the viewport. */
+  /** Place an element by the selection, flipping above it near the fold. */
   function place(el, rect) {
     el.hidden = false;
-    const top = rect.bottom + window.scrollY + 8;
+    const viewportH = document.documentElement.clientHeight;
+    const viewportW = document.documentElement.clientWidth;
+    const height = el.getBoundingClientRect().height || 0;
     const width = el.getBoundingClientRect().width || 340;
-    const left = Math.min(
-      Math.max(8 + window.scrollX, rect.left + window.scrollX),
-      window.scrollX + document.documentElement.clientWidth - width - 8,
-    );
-    el.style.top = `${top}px`;
-    el.style.left = `${left}px`;
+
+    const below = rect.bottom + 8;
+    const flip = below + height > viewportH && rect.top - height - 8 > 0;
+
+    el.style.top = `${(flip ? rect.top - height - 8 : below) + window.scrollY}px`;
+    el.style.left = `${
+      Math.min(
+        Math.max(8, rect.left),
+        Math.max(8, viewportW - width - 8),
+      ) + window.scrollX
+    }px`;
   }
 
-  function panelShell(inner, tag = "Context Lens") {
+  // Streaming state
+  let buffer = "";
+  let frame = null;
+  let bodyEl = null;
+  let anchor = null;
+
+  function flush() {
+    frame = null;
+    if (bodyEl) bodyEl.innerHTML = renderMarkdown(buffer);
+  }
+
+  function shell({ tag, tagPending, inner }) {
     panel.innerHTML = `
-      <div class="head"><span class="tag">${escapeHtml(tag)}</span>
-        <button class="close" title="Close">✕</button></div>
+      <div class="head">
+        <span class="tag${tagPending ? " pending" : ""}">${escapeHtml(tag)}</span>
+        <button class="close" title="Close">&#10005;</button>
+      </div>
       ${inner}`;
     panel.querySelector(".close").addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -155,44 +181,73 @@ export function createLens({ onExplain, onOpenSettings }) {
   function hide() {
     chip.hidden = true;
     panel.hidden = true;
+    if (frame) cancelAnimationFrame(frame);
+    frame = null;
+    bodyEl = null;
+    buffer = "";
   }
 
   return {
     node: host,
     contains: (target) => host.contains(target),
     hide,
+
     showChip(rect) {
       panel.hidden = true;
       place(chip, rect);
     },
-    showLoading(rect, subject) {
+
+    /** Opens immediately on click - before any network work starts. */
+    open(rect, subject) {
       chip.hidden = true;
-      panelShell(
-        `<div class="subject">${escapeHtml(subject)}</div>
-         <div class="muted"><span class="spinner"></span>Reading the page…</div>`,
-      );
+      buffer = "";
+      anchor = rect;
+      shell({
+        tag: "Identifying",
+        tagPending: true,
+        inner: `<div class="subject">${escapeHtml(subject)}</div>
+                <div class="body streaming"><p class="muted"></p></div>`,
+      });
+      bodyEl = panel.querySelector(".body");
       place(panel, rect);
     },
-    showResult(rect, { label, subject, explanation }) {
-      chip.hidden = true;
-      panelShell(
-        `<div class="subject">${escapeHtml(subject)}</div>
-         <div class="body">${renderMarkdown(explanation)}</div>`,
-        label,
-      );
-      place(panel, rect);
+
+    /** Swaps the header label in as soon as the category is known. */
+    setCategory(label) {
+      const tag = panel.querySelector(".tag");
+      if (!tag) return;
+      tag.textContent = label;
+      tag.classList.remove("pending");
     },
-    showError(rect, { message, actionLabel }) {
+
+    pushDelta(text) {
+      if (!bodyEl) return;
+      buffer += text;
+      if (!frame) frame = requestAnimationFrame(flush);
+    },
+
+    finish() {
+      if (frame) cancelAnimationFrame(frame);
+      flush();
+      bodyEl?.classList.remove("streaming");
+      // Content grew while streaming; re-anchor if that pushed it off-screen.
+      if (anchor) place(panel, anchor);
+    },
+
+    fail(rect, { message, actionLabel }) {
       chip.hidden = true;
-      panelShell(
-        `<div class="error">${escapeHtml(message)}
+      shell({
+        tag: "Context Lens",
+        tagPending: true,
+        inner: `<div class="error">${escapeHtml(message)}
           ${actionLabel ? `<div><button class="settings">${escapeHtml(actionLabel)}</button></div>` : ""}
-         </div>`,
-      );
+        </div>`,
+      });
       panel.querySelector(".settings")?.addEventListener("mousedown", (e) => {
         e.preventDefault();
         onOpenSettings();
       });
+      bodyEl = null;
       place(panel, rect);
     },
   };
