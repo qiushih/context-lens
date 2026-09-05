@@ -25,6 +25,33 @@ const HOUSE_RULES = `Output rules:
 
 const withLang = (shape, lang) => shape.replaceAll("{{LANG}}", lang);
 
+const FORMAT_NOTE = {
+  latex: "the page's own LaTeX source for this formula",
+  mathml: "the page's own MathML for this formula",
+  speech: "the renderer's structural reading of this formula (no source was published)",
+};
+
+/**
+ * Rendered math, when the page kept its source. This is authoritative and the
+ * selection is not: selecting rendered math commonly drops superscripts,
+ * flattens fractions, or duplicates glyphs. See content/math.js.
+ */
+function formulaBlock(math) {
+  if (!math?.source) return null;
+  return [
+    ``,
+    `<formula_source format="${math.format}">`,
+    math.source,
+    `</formula_source>`,
+    `The block above is ${FORMAT_NOTE[math.format] ?? "the page's own source"}. Explain it, not the selected text.`,
+    math.selectionWasPartial
+      ? `The reader selected only part of it; explain the whole formula.`
+      : null,
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+}
+
 /** Renders the extracted page context into the user turn. */
 export function contextBlock({ selection, context }) {
   return [
@@ -41,6 +68,7 @@ export function contextBlock({ selection, context }) {
     `<selection>`,
     selection,
     `</selection>`,
+    formulaBlock(context.math),
   ]
     .filter((line) => line !== null)
     .join("\n");

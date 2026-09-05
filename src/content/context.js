@@ -3,6 +3,8 @@
  * about *where* the selection came from. Cheap, synchronous, DOM-only.
  */
 
+import { formulaSourceFor } from "./math.js";
+
 const WINDOW_CHARS = 700; // characters of surrounding prose, split around the selection
 const BLOCK_SELECTOR =
   "p, li, td, th, blockquote, pre, figcaption, dd, dt, h1, h2, h3, h4, h5, h6, section, article, div";
@@ -59,8 +61,12 @@ export function extractContext({ text, range }) {
   const el = elementOf(range.commonAncestorContainer);
   const block = nearestBlock(el);
   const inCodeBlock = Boolean(el?.closest("pre, code, kbd, samp"));
+  // Rendered math keeps its own source; what was selected is often a mangled
+  // or partial rendering of it. See math.js.
+  const math = formulaSourceFor(el, text);
 
   return {
+    math,
     pageTitle: document.title,
     url: location.href,
     siteName: location.hostname,

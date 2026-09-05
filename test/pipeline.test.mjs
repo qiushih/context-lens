@@ -14,7 +14,7 @@ const ctx = (over = {}) => ({
   pageTitle: "Rust Book", siteName: "doc.rust-lang.org", url: "https://doc.rust-lang.org/x",
   description: "", headings: ["Ownership"],
   surrounding: "A reference is like a pointer.",
-  inCodeBlock: false, codeLanguage: null, ...over,
+  inCodeBlock: false, codeLanguage: null, math: null, ...over,
 });
 
 console.log("heuristic routing");
@@ -28,6 +28,9 @@ for (const [selection, context, expected] of [
   ["borrow checker", ctx(), null],
   ["Ada Lovelace", ctx(), null],
   ["ephemeral", ctx(), null],
+  // A recovered formula source outranks every text pattern.
+  ["𝐸 = 𝑚 𝑐 2", ctx({ math: { source: "E=mc^{2}", format: "latex" } }), CATEGORIES.FORMULA],
+  ["let x = &y;", ctx({ inCodeBlock: true, math: { source: "x", format: "latex" } }), CATEGORIES.FORMULA],
 ]) {
   const got = heuristicCategory({ selection, context });
   check(`  ${JSON.stringify(selection)}`, got === expected, `got ${got}`);

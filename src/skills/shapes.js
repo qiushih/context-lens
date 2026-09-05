@@ -18,7 +18,7 @@ export const SHAPES = {
   [CATEGORIES.ENTITY]:
     "who or what it is, what it is known for, and its connection to this page.",
   [CATEGORIES.FORMULA]:
-    "what the expression computes, then each symbol in order, then when it is used.",
+    "what the expression computes, then each symbol in order, then when it is used. If a formula_source block is present it is authoritative - explain that, and ignore the selected glyphs.",
   [CATEGORIES.CITATION]:
     "what work is being cited and what that work claims. Name authors, year and venue if you can identify it; say plainly that you cannot if you cannot.",
   [CATEGORIES.CODE]:

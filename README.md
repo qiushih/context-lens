@@ -56,6 +56,7 @@ src/
     transport.js         the port protocol and every way it can fail
     selection.js         reads window.getSelection() and its screen rect
     context.js           stage 2 — page context extraction (DOM only)
+    math.js              recovers a formula's own source from rendered math
     popup.js             stage 5 — floating chip + streaming panel, closed shadow root
   background/
     index.js             service worker: port lifecycle, settings, error mapping
@@ -78,6 +79,7 @@ test/
   pipeline.test.mjs      heuristics, routing, prompt assembly
   stream.test.mjs        CATEGORY-line parsing + explain() over a fake stream
   messaging.test.mjs     port failure modes against a fake chrome.runtime
+  math.test.mjs          the formula-source ladder
 bench/latency.mjs        live per-stage latency measurement, old path vs new
 build.mjs                esbuild: content → IIFE, worker → ESM
 ```
@@ -201,7 +203,7 @@ Every stage of the pipeline is real. One skill is authored end to end.
 | Category | How it is identified | Answer shape |
 | --- | --- | --- |
 | code | heuristic — code block or syntax | `shapes.js` |
-| formulas | heuristic — LaTeX / math symbols | `shapes.js` |
+| formulas | heuristic — recovered math source, else LaTeX / math symbols | `shapes.js` |
 | citations | heuristic — `[12]`, `et al.`, `doi:` | `shapes.js` |
 | technical terms | model, in the explanation call | **`technical-term.js`** |
 | vocabulary | model, in the explanation call | `shapes.js` |
@@ -210,6 +212,42 @@ Every stage of the pipeline is real. One skill is authored end to end.
 `shapes.js` holds a one-line answer shape per category. Registering a real skill module
 replaces its entry everywhere at once — in the known-category prompt and in the triage
 prompt, which is assembled from every shape.
+
+## Formula source recovery
+
+For formulas the selected text is not just incomplete when a reader grabs part of an
+equation — it is frequently **wrong even when they select the whole thing**, because what
+gets selected is the rendered glyphs, not the formula. Measured on live pages:
+
+| Page | Actual formula | What `getSelection()` returns |
+| --- | --- | --- |
+| katex.org | `\KaTeX` | `KaTeX K A T E ​ X` — doubled, MathML and HTML branches both selected, plus a zero-width space |
+| Wikipedia | `E=mc^{2}` | `𝐸 = 𝑚 𝑐 2` — **the superscript is gone** |
+| mathjax.org | `\frac{-b\pm\sqrt{b^2-4ac}}{2a}` | `𝑥=−𝑏±√𝑏2−4⁢𝑎⁢𝑐2⁢𝑎` — **the fraction is flattened**, numerator and denominator run together |
+
+So when a selection lands in rendered math, `content/math.js` ignores the selection and
+takes the page's own source, walking a ladder of what renderers actually publish:
+
+1. `annotation[encoding="application/x-tex"]` — KaTeX, Wikipedia, LaTeXML/arXiv, MathJax with MathML output
+2. `math[alttext]` — Wikipedia, LaTeXML
+3. `script[type="math/tex"]` — MathJax v2
+4. `data-latex` / `data-tex` attributes
+5. Wikipedia's image-fallback `alt` text, when it looks like TeX
+6. MathML — structured and unambiguous, just not TeX
+7. `data-semantic-speech-none` / `aria-label` — the renderer's own structural reading
+
+Verified live: rung 1 on katex.org and Wikipedia, rung 7 on mathjax.org. Because the whole
+container is read, a partial selection recovers the complete formula — and the prompt is
+told the selection was partial so the model explains the whole thing.
+
+Rung 7 is the interesting one. **MathJax v3/v4 with CHTML output publishes no source in
+the DOM at all** — no annotation, no assistive MathML, no data attribute. Its speech
+attribute ("x equals the fraction with numerator negative b plus or minus...") is prose
+rather than TeX, but it is structurally complete, which flattened Unicode is not. The
+`format` is passed to the model so it knows what it is reading.
+
+A recovered source also settles the category: `heuristicCategory` returns `formula`
+whenever one exists, which beats any pattern match on mangled glyphs and costs nothing.
 
 ## Security
 
@@ -224,6 +262,9 @@ for a `fetch` to your endpoint.
 - The transport is verified against a fake runtime, and the built worker is verified to
   load and register `onConnect` in a browser environment. Neither is a substitute for
   loading the unpacked extension in Chrome.
+- MathJax v3/v4 CHTML pages fall back to the speech attribute. The real TeX is reachable
+  through MathJax's own JS API (`MathJax.startup.document.math`), but only from the page's
+  main world — a content script runs isolated. That would need `world: "MAIN"` injection.
 - The five placeholder answer shapes are one line each. Real skills will want more, and
   citations in particular will need web search to actually *locate* a source.
 - Near the bottom of the viewport the panel is anchored above the selection using its

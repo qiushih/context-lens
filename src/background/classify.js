@@ -34,6 +34,10 @@ const any = (patterns, text) => patterns.some((re) => re.test(text));
 
 /** A category, or null when only the model can tell. */
 export function heuristicCategory({ selection, context }) {
+  // The selection landed inside rendered math and we recovered its source.
+  // More reliable than any pattern match on the selected glyphs, which are
+  // frequently mangled by the renderer.
+  if (context.math?.source) return CATEGORIES.FORMULA;
   if (context.inCodeBlock && selection.length > 2) return CATEGORIES.CODE;
   if (any(FORMULA_PATTERNS, selection)) return CATEGORIES.FORMULA;
   if (any(CITATION_PATTERNS, selection)) return CATEGORIES.CITATION;
