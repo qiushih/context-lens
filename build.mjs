@@ -4,6 +4,13 @@ import { cp, mkdir, rm } from "node:fs/promises";
 const watch = process.argv.includes("--watch");
 const outdir = "dist";
 
+/**
+ * Stamped into every bundle so a page can prove which build it is running.
+ * Both bundles in one build share the id; a mismatch at runtime means the
+ * browser is loading a stale dist.
+ */
+const buildId = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
+
 const bundles = [
   // Content script: classic IIFE - MV3 content scripts cannot be ES modules.
   { entry: "src/content/index.js", out: `${outdir}/content.js`, format: "iife" },
@@ -25,8 +32,11 @@ const optionsFor = ({ entry, out, format }) => ({
   target: "chrome120",
   platform: "browser",
   sourcemap: watch ? "inline" : false,
+  define: { __BUILD_ID__: JSON.stringify(buildId) },
   logLevel: "info",
 });
+
+console.log(`build id ${buildId}`);
 
 if (watch) {
   const ctxs = await Promise.all(bundles.map((b) => context(optionsFor(b))));

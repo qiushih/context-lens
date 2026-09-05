@@ -18,6 +18,9 @@
  *  - early close the port dropped mid-answer.
  */
 import { EXPLAIN_PORT, EVENT } from "../shared/messages.js";
+import { traceFrom } from "../shared/debug.js";
+
+const trace = traceFrom("content");
 
 export const FAILURE = {
   ORPHANED: "orphaned",
@@ -81,17 +84,22 @@ export function createTransport({
      *        onFailure receives ({ reason, detail }) exactly once.
      */
     request(payload, handlers) {
+      trace("2. transport.request entered");
       close();
 
       if (orphaned) {
+        trace("2a. short-circuit: already orphaned");
         handlers.onFailure({ reason: FAILURE.ORPHANED });
         return;
       }
 
       let port;
       try {
+        trace("3. runtime.connect calling", { name: EXPLAIN_PORT });
         port = runtime.connect({ name: EXPLAIN_PORT });
+        trace("4. port created", { name: port?.name, hasOnMessage: !!port?.onMessage });
       } catch (err) {
+        trace("4x. runtime.connect THREW", err.message);
         markOrphanIfNeeded(err);
         handlers.onFailure({
           reason: orphaned ? FAILURE.ORPHANED : FAILURE.NO_ACK,
@@ -105,6 +113,7 @@ export function createTransport({
 
       const settle = (failure) => {
         if (session.done) return;
+        trace("settle", failure ? failure.reason : "success");
         session.done = true;
         clearTimeoutFn(session.timer);
         if (failure) handlers.onFailure(failure);
@@ -113,15 +122,20 @@ export function createTransport({
 
       const arm = (ms, failure) => {
         clearTimeoutFn(session.timer);
-        session.timer = setTimeoutFn(() => settle(failure), ms);
+        session.timer = setTimeoutFn(() => {
+          trace("10. TIMEOUT fired", failure.reason);
+          settle(failure);
+        }, ms);
       };
 
       arm(timeouts.ack, { reason: FAILURE.NO_ACK });
+      trace("5. ack timer armed", `${timeouts.ack}ms`);
 
       port.onMessage.addListener((event) => {
         if (session.done) return;
         switch (event.type) {
           case EVENT.ACK:
+            trace("7. ACK received");
             session.acked = true;
             arm(timeouts.response, { reason: FAILURE.TIMEOUT });
             handlers.onAck?.();
@@ -144,6 +158,7 @@ export function createTransport({
       });
 
       port.onDisconnect.addListener(() => {
+        trace("11. port disconnected", { lastError: runtime.lastError?.message ?? null });
         // Reading lastError here is what stops Chrome logging
         // "Unchecked runtime.lastError: Could not establish connection...",
         // and it is the only place the real reason is available.
@@ -163,7 +178,9 @@ export function createTransport({
 
       try {
         port.postMessage({ type: "start", payload });
+        trace("6. start message posted");
       } catch (err) {
+        trace("6x. postMessage THREW", err.message);
         markOrphanIfNeeded(err);
         settle({
           reason: orphaned ? FAILURE.ORPHANED : FAILURE.SEND_FAILED,

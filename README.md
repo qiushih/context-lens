@@ -125,6 +125,44 @@ that cannot succeed.
 `transport.js` holds this logic with the DOM kept out, so `test/messaging.test.mjs` can
 drive all of it against a fake `chrome.runtime`.
 
+## Tracing the messaging path
+
+Both bundles carry a build id, printed by `npm run build` and stamped into every trace
+line. That is the fastest way to tell whether a tab is running the bundle you just built:
+
+```
+npm run build          # prints e.g. "build id 20260905T010844"
+```
+
+Then, on any page where the extension is active, open DevTools and check:
+
+- **Page console** — `__contextLensBuild` returns the id the content script was built
+  with. A different id (or `undefined`) means Chrome is not loading the `dist/` you just
+  built: check the path on the `chrome://extensions` card, and that no second copy of the
+  extension is installed.
+- **Worker console** — open it from the extension's card ("service worker"). It logs
+  `0. worker script evaluated` with the same id at startup.
+
+With both consoles open, one explanation prints a numbered trace across the two sides:
+content `0` → `1. startExplain` → `3. runtime.connect` → `4. port created` →
+`5. ack timer armed` → `6. start message posted`, worker `5. onConnect` → `6w. ack posted`
+→ `7w. port message` → `8. Anthropic request starting` → `9w. first stream event`, content
+`7. ACK received` → `9. first stream event` → `9d. done`. Any failure prints
+`10. TIMEOUT fired`, `11. port disconnected` or `12. FAILURE surfaced to popup`.
+
+Where the trace stops is the answer:
+
+| Last line seen | Meaning |
+| --- | --- |
+| nothing at all | the content script is not injected, or the tab predates the extension |
+| `1. startExplain` with no `2.` | the popup opened but the transport was never reached |
+| `6. start message posted`, no worker output | the worker is not running this build, or never started |
+| worker `5. onConnect` but no `6w.` | the port died between connect and ack |
+| `8.` with no `9w.` | the request left the extension and Anthropic has not answered |
+
+The tracing is temporary. To remove it, delete `src/shared/debug.js` and its `trace(...)`
+call sites.
+
 ## Latency
 
 The pipeline was rebuilt around time-to-first-useful-pixel. Where the time was going:

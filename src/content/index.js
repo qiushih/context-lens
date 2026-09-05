@@ -11,6 +11,10 @@ import { readSelection, MAX_SELECTION_CHARS } from "./selection.js";
 import { extractContext } from "./context.js";
 import { createLens } from "./popup.js";
 import { createTransport, describeFailure } from "./transport.js";
+import { traceFrom, BUILD_ID } from "../shared/debug.js";
+
+const trace = traceFrom("content");
+trace("0. content script loaded", { url: location.href });
 
 let pending = null; // { text, rect, context }
 
@@ -45,6 +49,7 @@ function capture() {
 }
 
 function startExplain({ text, rect, context }) {
+  trace("1. startExplain invoked", { selection: text.slice(0, 40) });
   const clickedAt = performance.now();
   let firstPaint = null;
 
@@ -56,11 +61,15 @@ function startExplain({ text, rect, context }) {
       onCategory: (event) => lens.setCategory(event.label),
 
       onDelta: (event) => {
-        if (firstPaint === null) firstPaint = performance.now() - clickedAt;
+        if (firstPaint === null) {
+          trace("9. first stream event");
+          firstPaint = performance.now() - clickedAt;
+        }
         lens.pushDelta(event.text);
       },
 
       onDone: (event) => {
+        trace("9d. done", event.timing);
         lens.finish();
         console.debug(
           "[context-lens] first paint %sms, total %sms%s",
@@ -70,8 +79,9 @@ function startExplain({ text, rect, context }) {
         );
       },
 
-      onError: (error) =>
-        lens.fail(
+      onError: (error) => {
+        trace("12e. worker error surfaced to popup", error);
+        return lens.fail(
           rect,
           error.code === ERROR_CODES.NO_API_KEY
             ? {
@@ -79,9 +89,11 @@ function startExplain({ text, rect, context }) {
                 action: { label: "Open settings", kind: "settings" },
               }
             : { message: error.message ?? "Something went wrong." },
-        ),
+        );
+      },
 
       onFailure: (failure) => {
+        trace("12. FAILURE surfaced to popup", failure);
         const { message, reload } = describeFailure(failure);
         lens.fail(rect, {
           message,
@@ -91,6 +103,10 @@ function startExplain({ text, rect, context }) {
     },
   );
 }
+
+// Lets the user confirm which bundle a tab is running: `__contextLensBuild`
+// in the page console must match the id printed by `npm run build`.
+window.__contextLensBuild = BUILD_ID;
 
 document.addEventListener("mouseup", (e) => {
   if (lens.contains(e.target)) return;

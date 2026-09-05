@@ -13,6 +13,10 @@ import { getSettings } from "../shared/settings.js";
 import { getClient, RefusalError } from "./anthropic.js";
 import { explain } from "./explain.js";
 import { cacheKey, readCache, writeCache } from "./cache.js";
+import { traceFrom, BUILD_ID } from "../shared/debug.js";
+
+const trace = traceFrom("worker");
+trace("0. worker script evaluated");
 
 function toError(err) {
   if (err instanceof RefusalError) {
@@ -40,6 +44,7 @@ async function handleExplain(port, payload) {
   let closed = false;
 
   port.onDisconnect.addListener(() => {
+    trace("11w. port disconnected by the other end");
     closed = true;
     abort.abort();
   });
@@ -65,6 +70,8 @@ async function handleExplain(port, payload) {
     const input = { selection: payload.selection, context: payload.context };
     const key = cacheKey({ ...input, modelTier });
 
+    trace("8a. settings read", { modelTier, hasKey: true });
+
     const hit = await readCache(key);
     if (hit) {
       send({ type: EVENT.CATEGORY, ...hit.category, source: "cache" });
@@ -76,6 +83,7 @@ async function handleExplain(port, payload) {
       return;
     }
 
+    trace("8. Anthropic request starting", { modelTier });
     const result = await explain({
       client: getClient(apiKey),
       input,
@@ -85,6 +93,7 @@ async function handleExplain(port, payload) {
       onEvent: (event) => {
         if (event.type === EVENT.DELTA && timing.firstToken === null) {
           timing.firstToken = performance.now() - t0;
+          trace("9w. first stream event from Anthropic", `${Math.round(timing.firstToken)}ms`);
         }
         send(event);
       },
@@ -100,6 +109,7 @@ async function handleExplain(port, payload) {
       });
     }
   } catch (err) {
+    trace("8x. request failed", err?.message ?? String(err));
     if (abort.signal.aborted) return; // user closed the popup; not an error
     send({ type: EVENT.ERROR, error: toError(err) });
   }
@@ -109,6 +119,7 @@ async function handleExplain(port, payload) {
 // that woke the worker only to listeners that exist by the end of the initial
 // script evaluation, so nothing here may be deferred behind an await.
 chrome.runtime.onConnect.addListener((port) => {
+  trace("5. onConnect", { name: port.name });
   if (port.name !== EXPLAIN_PORT) return;
 
   // Answer immediately, before any settings or network work. This is what lets
@@ -116,11 +127,14 @@ chrome.runtime.onConnect.addListener((port) => {
   // "the explanation is still coming".
   try {
     port.postMessage({ type: EVENT.ACK });
-  } catch {
+    trace("6w. ack posted");
+  } catch (err) {
+    trace("6wx. ack post THREW", err?.message);
     return; // the other end is already gone
   }
 
   port.onMessage.addListener((message) => {
+    trace("7w. port message", message?.type);
     if (message?.type === "start") handleExplain(port, message.payload);
   });
 });
@@ -129,7 +143,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // A no-op whose only job is waking this worker while the user is still
   // reading the chip, so worker spin-up is off the critical path.
   if (message?.type === MSG.PING) {
-    sendResponse({ ok: true });
+    trace("ping received");
+    sendResponse({ ok: true, build: BUILD_ID });
     return false;
   }
   if (message?.type === MSG.OPEN_OPTIONS) {
