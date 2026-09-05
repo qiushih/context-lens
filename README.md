@@ -5,6 +5,10 @@ Select a term on a page, click **Explain**, and get an explanation shaped for th
 thing — a technical term gets a technical answer, a citation gets its source located, a
 formula gets its symbols broken down.
 
+## Demo
+![Context Lens Demo](assets/context-lens-demo.gif)
+
+
 ## Architecture
 
 ```
